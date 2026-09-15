@@ -141,43 +141,162 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "changeme")
 
 @app.get("/admin", response_class=HTMLResponse)
 def admin_page():
-    # Load unanswered questions
     unanswered_html = ""
     if os.path.exists(UNANSWERED_LOG):
         with open(UNANSWERED_LOG) as f:
             lines = [line.strip() for line in f.readlines()]
         if lines:
-            unanswered_html = "<ul>" + "".join(f"<li>{line}</li>" for line in lines) + "</ul>"
+            unanswered_html = "".join(
+                f'<div class="unanswered-item">{line}</div>' for line in reversed(lines)
+            )
         else:
-            unanswered_html = "<p>No unanswered questions yet.</p>"
+            unanswered_html = '<p class="empty">No unanswered questions yet 🎉</p>'
     else:
-        unanswered_html = "<p>No unanswered questions yet.</p>"
+        unanswered_html = '<p class="empty">No unanswered questions yet 🎉</p>'
 
     return f"""
     <html>
-    <head><title>Chatbot Admin</title></head>
-    <body style="font-family: sans-serif; max-width: 600px; margin: 40px auto;">
-        <h2>Admin Panel</h2>
+    <head>
+        <title>Chatbot Admin</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            * {{ box-sizing: border-box; }}
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                min-height: 100vh;
+                margin: 0;
+                padding: 40px 20px;
+            }}
+            .container {{
+                max-width: 640px;
+                margin: 0 auto;
+            }}
+            h1 {{
+                color: white;
+                text-align: center;
+                margin-bottom: 30px;
+                font-size: 28px;
+            }}
+            .card {{
+                background: white;
+                border-radius: 16px;
+                padding: 28px;
+                margin-bottom: 24px;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+            }}
+            .card h2 {{
+                margin-top: 0;
+                color: #333;
+                font-size: 18px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }}
+            label {{
+                display: block;
+                font-size: 13px;
+                font-weight: 600;
+                color: #555;
+                margin-bottom: 6px;
+                margin-top: 16px;
+            }}
+            input, textarea {{
+                width: 100%;
+                padding: 12px;
+                border: 1.5px solid #e0e0e0;
+                border-radius: 8px;
+                font-size: 14px;
+                font-family: inherit;
+                transition: border-color 0.2s;
+            }}
+            input:focus, textarea:focus {{
+                outline: none;
+                border-color: #764ba2;
+            }}
+            button {{
+                width: 100%;
+                margin-top: 20px;
+                padding: 13px;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                border: none;
+                border-radius: 8px;
+                font-size: 15px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: opacity 0.2s;
+            }}
+            button:hover {{ opacity: 0.9; }}
+            #result {{
+                margin-top: 14px;
+                font-size: 14px;
+                font-weight: 500;
+            }}
+            .unanswered-item {{
+                background: #f8f7fc;
+                border-left: 3px solid #764ba2;
+                padding: 10px 14px;
+                margin-bottom: 8px;
+                border-radius: 6px;
+                font-size: 13px;
+                color: #444;
+                word-break: break-word;
+            }}
+            .empty {{
+                color: #999;
+                text-align: center;
+                padding: 20px 0;
+            }}
+            .scroll-box {{
+                max-height: 300px;
+                overflow-y: auto;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🎓 Campus Chatbot Admin</h1>
 
-        <label>Password:</label><br>
-        <input type="password" id="password" style="width: 100%; padding: 8px; margin-bottom: 20px;"><br>
+            <div class="card">
+                <h2>🔐 Admin Access</h2>
+                <label>Password</label>
+                <input type="password" id="password" placeholder="Enter admin password">
+            </div>
 
-        <h3>Add New Fact</h3>
-        <label>Topic:</label><br>
-        <input type="text" id="topic" style="width: 100%; padding: 8px; margin-bottom: 10px;"><br>
-        <label>Info:</label><br>
-        <textarea id="info" style="width: 100%; padding: 8px; margin-bottom: 10px;" rows="3"></textarea><br>
-        <button onclick="addFact()" style="padding: 10px 20px;">Add Fact</button>
-        <p id="result"></p>
+            <div class="card">
+                <h2>➕ Add New Fact</h2>
+                <label>Topic</label>
+                <input type="text" id="topic" placeholder="e.g. DBMS Lab">
+                <label>Info</label>
+                <textarea id="info" rows="3" placeholder="e.g. Located on the third floor of CSIT block"></textarea>
+                <button onclick="addFact()">Add Fact</button>
+                <p id="result"></p>
+            </div>
 
-        <h3>Unanswered Questions</h3>
-        {unanswered_html}
+            <div class="card">
+                <h2>❓ Unanswered Questions</h2>
+                <div class="scroll-box">
+                    {unanswered_html}
+                </div>
+            </div>
+        </div>
 
         <script>
         async function addFact() {{
             const password = document.getElementById('password').value;
             const topic = document.getElementById('topic').value;
             const info = document.getElementById('info').value;
+            const resultEl = document.getElementById('result');
+
+            if (!topic || !info) {{
+                resultEl.style.color = '#e74c3c';
+                resultEl.innerText = 'Please fill in both fields.';
+                return;
+            }}
+
+            resultEl.style.color = '#888';
+            resultEl.innerText = 'Adding...';
 
             const res = await fetch('/add-fact', {{
                 method: 'POST',
@@ -189,9 +308,15 @@ def admin_page():
             }});
 
             const data = await res.json();
-            document.getElementById('result').innerText = res.ok
-                ? 'Added: ' + data.topic
-                : 'Error: ' + data.detail;
+            if (res.ok) {{
+                resultEl.style.color = '#27ae60';
+                resultEl.innerText = '✅ Added: ' + data.topic;
+                document.getElementById('topic').value = '';
+                document.getElementById('info').value = '';
+            }} else {{
+               resultEl.style.color = '#e74c3c';
+                resultEl.innerText = '❌ Error: ' + data.detail;
+            }}
         }}
         </script>
     </body>

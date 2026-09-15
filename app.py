@@ -26,10 +26,33 @@ import urllib.request
 from fastapi.responses import HTMLResponse
 from fastapi import Header, HTTPException
 
-app = FastAPI(title="College Campus Chatbot")
+app = FastAPI(title="College Campus Chatbot", docs_url=None, redoc_url=None)
 retriever = Retriever("knowledge_base.csv")
 
 UNANSWERED_LOG = "unanswered_questions.log"
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "changeme")
+
+# Track failed password attempts (resets when server restarts/redeploys)
+failed_attempts = {"count": 0}
+MAX_ATTEMPTS = 3
+
+
+def verify_admin_password(password: str):
+    """Shared password check for all admin-only routes, with a 3-try limit."""
+    if failed_attempts["count"] >= MAX_ATTEMPTS:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed attempts. Restart the server or wait before trying again.",
+        )
+    if password != ADMIN_PASSWORD:
+        failed_attempts["count"] += 1
+        remaining = MAX_ATTEMPTS - failed_attempts["count"]
+        raise HTTPException(
+            status_code=401,
+            detail=f"Invalid password. {remaining} attempts remaining.",
+        )
+    # Correct password — reset counter
+    failed_attempts["count"] = 0
 
 
 class Question(BaseModel):
@@ -121,39 +144,25 @@ def ask(question: Question):
 
 @app.post("/add-fact")
 def add_fact(fact: NewFact, x_admin_password: str = Header(None)):
-    if x_admin_password != ADMIN_PASSWORD:
-        raise HTTPException(status_code=401, detail="Invalid password")
+    verify_admin_password(x_admin_password)
     retriever.add_fact(fact.topic, fact.info)
     retriever.save("knowledge_base.csv")
     return {"status": "added", "topic": fact.topic}
 
 
 @app.get("/unanswered")
-def get_unanswered():
-    """See what students asked that you don't have data for yet."""
+def get_unanswered(x_admin_password: str = Header(None)):
+    """See what students asked that you don't have data for yet. Admin-only."""
+    verify_admin_password(x_admin_password)
     if not os.path.exists(UNANSWERED_LOG):
         return {"unanswered": []}
     with open(UNANSWERED_LOG) as f:
         lines = [line.strip() for line in f.readlines()]
     return {"unanswered": lines}
 
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "changeme")
 
 @app.get("/admin", response_class=HTMLResponse)
 def admin_page():
-    unanswered_html = ""
-    if os.path.exists(UNANSWERED_LOG):
-        with open(UNANSWERED_LOG) as f:
-            lines = [line.strip() for line in f.readlines()]
-        if lines:
-            unanswered_html = "".join(
-                f'<div class="unanswered-item">{line}</div>' for line in reversed(lines)
-            )
-        else:
-            unanswered_html = '<p class="empty">No unanswered questions yet 🎉</p>'
-    else:
-        unanswered_html = '<p class="empty">No unanswered questions yet 🎉</p>'
-
     return f"""
     <html>
     <head>
@@ -276,9 +285,9 @@ def admin_page():
 
             <div class="card">
                 <h2>❓ Unanswered Questions</h2>
-                <div class="scroll-box">
-                    {unanswered_html}
-                </div>
+                <button onclick="viewUnanswered()">View Unanswered</button>
+                <p id="unansweredResult"></p>
+                <div class="scroll-box" id="unansweredBox"></div>
             </div>
         </div>
 
@@ -315,6 +324,45 @@ def admin_page():
                 document.getElementById('info').value = '';
             }} else {{
                resultEl.style.color = '#e74c3c';
+                resultEl.innerText = 'Error: ' + data.detail;
+            }}
+        }}
+
+        async function viewUnanswered() {{
+            const password = document.getElementById('password').value;
+            const resultEl = document.getElementById('unansweredResult');
+            const boxEl = document.getElementById('unansweredBox');
+
+            if (!password) {{
+                resultEl.style.color = '#e74c3c';
+                resultEl.innerText = 'Enter the admin password above first.';
+                return;
+            }}
+
+            resultEl.style.color = '#888';
+            resultEl.innerText = 'Loading...';
+            boxEl.innerHTML = '';
+
+            const res = await fetch('/unanswered', {{
+                method: 'GET',
+                headers: {{
+                    'x-admin-password': password
+                }}
+            }});
+
+            const data = await res.json();
+            if (res.ok) {{
+                resultEl.innerText = '';
+                if (data.unanswered.length === 0) {{
+                    boxEl.innerHTML = '<p class="empty">No unanswered questions yet 🎉</p>';
+                }} else {{
+                    boxEl.innerHTML = data.unanswered
+                        .slice().reverse()
+                        .map(line => `<div class="unanswered-item">${{line}}</div>`)
+                        .join('');
+                }}
+            }} else {{
+                resultEl.style.color = '#e74c3c';
                 resultEl.innerText = 'Error: ' + data.detail;
             }}
         }}

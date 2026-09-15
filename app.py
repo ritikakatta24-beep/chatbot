@@ -315,7 +315,7 @@ def admin_page():
                 document.getElementById('info').value = '';
             }} else {{
                resultEl.style.color = '#e74c3c';
-                resultEl.innerText = '❌ Error: ' + data.detail;
+                resultEl.innerText = 'Error: ' + data.detail;
             }}
         }}
         </script>

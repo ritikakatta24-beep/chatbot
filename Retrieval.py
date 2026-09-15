@@ -11,7 +11,7 @@ Install first:
 Model used: all-MiniLM-L6-v2
 - Small (~80MB), fast, runs fine on CPU, great accuracy for this kind of task.
 """
-
+# SentenceTransformed automaticalaly download pytorch and other dependencies when you install it, so you don't need to install them separately.
 import pandas as pd
 from sentence_transformers import SentenceTransformer, util
 
@@ -22,7 +22,7 @@ class Retriever:
         self.df = pd.read_csv(kb_path)
 
         # Load the embedding model once (this is a separate model from the LLM)
-        self.model = SentenceTransformer("all-MiniLM-L6-v2")
+        self.model = SentenceTransformer("all-MiniLM-L6-v2") # here this all-MiniLM-L6-v2 is an embedding model which is nothing but neural network only
 
         self.corpus = (self.df["topic"] + ". " + self.df["info"]).tolist()
         self.fact_embeddings = self._embed(self.corpus)

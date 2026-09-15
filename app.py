@@ -23,6 +23,8 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from Retrieval import Retriever
 import urllib.request
+from fastapi.responses import HTMLResponse
+from fastapi import Header, HTTPException
 
 app = FastAPI(title="College Campus Chatbot")
 retriever = Retriever("knowledge_base.csv")
@@ -118,9 +120,9 @@ def ask(question: Question):
 
 
 @app.post("/add-fact")
-def add_fact(fact: NewFact):
-    """This is your answer to 'can I add data later' — no code change needed,
-    just a new entry, and it's immediately searchable."""
+def add_fact(fact: NewFact, x_admin_password: str = Header(None)):
+    if x_admin_password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Invalid password")
     retriever.add_fact(fact.topic, fact.info)
     retriever.save("knowledge_base.csv")
     return {"status": "added", "topic": fact.topic}
@@ -134,3 +136,64 @@ def get_unanswered():
     with open(UNANSWERED_LOG) as f:
         lines = [line.strip() for line in f.readlines()]
     return {"unanswered": lines}
+
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "changeme")
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page():
+    # Load unanswered questions
+    unanswered_html = ""
+    if os.path.exists(UNANSWERED_LOG):
+        with open(UNANSWERED_LOG) as f:
+            lines = [line.strip() for line in f.readlines()]
+        if lines:
+            unanswered_html = "<ul>" + "".join(f"<li>{line}</li>" for line in lines) + "</ul>"
+        else:
+            unanswered_html = "<p>No unanswered questions yet.</p>"
+    else:
+        unanswered_html = "<p>No unanswered questions yet.</p>"
+
+    return f"""
+    <html>
+    <head><title>Chatbot Admin</title></head>
+    <body style="font-family: sans-serif; max-width: 600px; margin: 40px auto;">
+        <h2>Admin Panel</h2>
+
+        <label>Password:</label><br>
+        <input type="password" id="password" style="width: 100%; padding: 8px; margin-bottom: 20px;"><br>
+
+        <h3>Add New Fact</h3>
+        <label>Topic:</label><br>
+        <input type="text" id="topic" style="width: 100%; padding: 8px; margin-bottom: 10px;"><br>
+        <label>Info:</label><br>
+        <textarea id="info" style="width: 100%; padding: 8px; margin-bottom: 10px;" rows="3"></textarea><br>
+        <button onclick="addFact()" style="padding: 10px 20px;">Add Fact</button>
+        <p id="result"></p>
+
+        <h3>Unanswered Questions</h3>
+        {unanswered_html}
+
+        <script>
+        async function addFact() {{
+            const password = document.getElementById('password').value;
+            const topic = document.getElementById('topic').value;
+            const info = document.getElementById('info').value;
+
+            const res = await fetch('/add-fact', {{
+                method: 'POST',
+                headers: {{
+                    'Content-Type': 'application/json',
+                    'x-admin-password': password
+                }},
+                body: JSON.stringify({{ topic: topic, info: info }})
+            }});
+
+            const data = await res.json();
+            document.getElementById('result').innerText = res.ok
+                ? 'Added: ' + data.topic
+                : 'Error: ' + data.detail;
+        }}
+        </script>
+    </body>
+    </html>
+    """

@@ -1,19 +1,54 @@
 """
-RETRIEVAL LAYER (real embeddings version)
-==========================================
-Uses sentence-transformers to convert text into true semantic embeddings —
-sentences with similar MEANING land close together in vector space, even
-with completely different wording (e.g. "where can I eat" ~ "canteen").
+RETRIEVAL LAYER (Gemini embeddings version — lightweight, deploy-friendly)
+============================================================================
+Instead of loading a local embedding model (sentence-transformers + PyTorch,
+which needs 500MB+ RAM and crashes Render's free tier), this version sends
+text to Gemini's embedContent API and gets back embedding vectors. Same
+RAG logic (cosine similarity, top-k, threshold) — just no local model.
 
-Install first:
-    pip install sentence-transformers numpy pandas
+Install:
+    pip install numpy pandas
 
-Model used: all-MiniLM-L6-v2
-- Small (~80MB), fast, runs fine on CPU, great accuracy for this kind of task.
+Needs:
+    export GEMINI_API_KEY=your_key_here
 """
-# SentenceTransformed automaticalaly download pytorch and other dependencies when you install it, so you don't need to install them separately.
+
+import os
+import json
+import numpy as np
 import pandas as pd
-from sentence_transformers import SentenceTransformer, util
+import urllib.request
+from dotenv import load_dotenv
+
+load_dotenv()
+
+EMBED_MODEL = "gemini-embedding-001"
+EMBED_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{EMBED_MODEL}:embedContent"
+
+
+def _embed_one(text: str) -> list:
+    """Call Gemini's embedContent endpoint for a single piece of text."""
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY not set — required for embeddings too, not just generation.")
+
+    payload = json.dumps({
+        "content": {"parts": [{"text": text}]}
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        EMBED_URL,
+        data=payload,
+        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+    )
+    with urllib.request.urlopen(req) as resp:
+        data = json.loads(resp.read())
+    return data["embedding"]["values"]
+
+
+def cosine_similarity(a, b):
+    a, b = np.array(a), np.array(b)
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 
 class Retriever:
@@ -21,15 +56,14 @@ class Retriever:
         self.kb_path = kb_path
         self.df = pd.read_csv(kb_path)
 
-        # Load the embedding model once (this is a separate model from the LLM)
-        self.model = SentenceTransformer("all-MiniLM-L6-v2") # here this all-MiniLM-L6-v2 is an embedding model which is nothing but neural network only
-
         self.corpus = (self.df["topic"] + ". " + self.df["info"]).tolist()
-        self.fact_embeddings = self._embed(self.corpus)
+        self.fact_embeddings = self._embed_all(self.corpus)
 
-    def _embed(self, texts):
-        """Convert a list of texts into embedding vectors."""
-        return self.model.encode(texts, convert_to_tensor=True)
+    def _embed_all(self, texts):
+        """Embed a list of texts one at a time via the API.
+        (Gemini's embedContent also supports batch mode — fine to upgrade
+        to that later if you have many facts and want fewer API calls.)"""
+        return [_embed_one(t) for t in texts]
 
     def add_fact(self, topic: str, info: str):
         """Add new data WITHOUT touching any other code — this is the
@@ -39,31 +73,26 @@ class Retriever:
         new_row = pd.DataFrame([{"id": new_id, "topic": topic, "info": info}])
         self.df = pd.concat([self.df, new_row], ignore_index=True)
         self.corpus = (self.df["topic"] + ". " + self.df["info"]).tolist()
-        # Re-embed everything (fine for small/medium knowledge bases;
-        # for thousands of facts, you'd only embed the new one and append)
-        self.fact_embeddings = self._embed(self.corpus)
+        # Only embed the NEW fact and append — no need to re-call the API
+        # for facts that haven't changed (this matters more now since each
+        # embedding is a network call, not a free local computation).
+        self.fact_embeddings.append(_embed_one(f"{topic}. {info}"))
 
     def save(self, kb_path=None):
         self.df.to_csv(kb_path or self.kb_path, index=False)
 
     def retrieve(self, query: str, top_k: int = 3, min_score: float = 0.35):
         """
-        1. Convert the user's question into an embedding
+        1. Convert the user's question into an embedding (via API call)
         2. Compare it to every fact's embedding (cosine similarity)
         3. Return the top_k closest facts, above a minimum confidence score
-
-        Note: min_score is higher here (0.35) than a TF-IDF version would use
-        because real embeddings give smoother, more meaningful similarity
-        scores — tune this threshold based on testing with real questions.
         """
-        query_embedding = self.model.encode(query, convert_to_tensor=True)
-        scores = util.cos_sim(query_embedding, self.fact_embeddings)[0]
-        scores = scores.cpu().numpy()
+        query_embedding = _embed_one(query)
+        scores = [cosine_similarity(query_embedding, fe) for fe in self.fact_embeddings]
 
-        # Pair each row (as a dict) with its score, sort best-first
         records = self.df.to_dict("records")
         ranked = sorted(zip(records, scores), key=lambda x: x[1], reverse=True)
-        results = [(fact, float(score)) for fact, score in ranked[:top_k] if score >= min_score]
+        results = [(fact, score) for fact, score in ranked[:top_k] if score >= min_score]
         return results
 
 
@@ -74,9 +103,9 @@ if __name__ == "__main__":
         "where is the pps lab",
         "how many canteens are there",
         "DBMS lab location",
-        "where can I eat",          # paraphrased — should still match canteen now
+        "where can I eat",
         "where is the sports ground",
-        "what is the weather today",  # should find nothing relevant
+        "what is the weather today",
     ]
 
     for q in test_questions:
